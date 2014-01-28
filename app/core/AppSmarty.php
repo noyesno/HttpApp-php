@@ -71,7 +71,7 @@ function smarty_optimize_template($tpl_source, $smarty){
   return join("\n",$tlines);
 }  
 
-define('SMARTY_DIR', AppCfg::get('smarty.dir'));
+define('SMARTY_DIR', AppConfig::get('smarty.dir'));
 #-- require_once(SMARTY_DIR.'Smarty.class.php');
 require(SMARTY_DIR.'Smarty.class.php');
 
@@ -129,11 +129,15 @@ class AppSmarty extends Smarty {
     $this->setConfigDir(HTTP_APP.'/page');
     $this->use_sub_dirs  = true; //true; 
     $this->compile_check = Smarty::COMPILECHECK_CACHEMISS; //false; // true; // Smarty::COMPILECHECK_CACHEMISS
-    $this->compile_check = true; 
+    // $this->compile_check = true;
     $this->cache_modified_check = true;
-    $this->caching_type = AppCfg::get('smarty.caching_type','file');
-    
+    //$this->caching_type = 'sfile';
+    if(1 || isset($_GET['_sqlite'])) $this->caching_type = 'sqlite';
     $this->default_modifiers = array('escape:"html"');
+
+    if(!empty($_GET['_nocache'])){
+      $this->compile_check = true;
+    }
 
     if(isset($_GET['theme'])){
       $theme = $_GET['theme'];
@@ -159,8 +163,8 @@ class AppSmarty extends Smarty {
     */
     
     // TODO:
-    //$cfgfile = AppCfg::get('smarty.cfg');
-    //if($file = AppCfg::get('smarty.cfg')) $this->configLoad($file);
+    //$cfgfile = AppConfig::get('smarty.cfg');
+    //if($file = AppConfig::get('smarty.cfg')) $this->configLoad($file);
     //TODO: $this->configLoad(HTTP_APP.'/conf/smarty.cfg');
 
     $this->registerPlugin("block",'dynamic', 'smarty_block_dynamic', false);
@@ -207,3 +211,4 @@ class AppSmarty extends Smarty {
      return $html;
    } // end fetch(...)
 } // end class AppSmarty
+?>

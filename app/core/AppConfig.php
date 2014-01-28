@@ -12,6 +12,7 @@ class AppConfig {
     if($k) return isset(self::$cfg[$k])?(self::$cfg[$k]):$value;
     return self::$cfg;
   }
+
   static function set($k=null, $value=null){
     if(!isset(self::$cfg)) self::init();
     self::$cfg[$k] = $value;
@@ -31,5 +32,5 @@ class AppConfig {
     file_put_contents(serialize($cfg));
     return;
   }
-} // end class: AppCfg
+}
 
