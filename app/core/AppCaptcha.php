@@ -20,7 +20,7 @@ class AppCaptcha {
     return md5(join('',$parts));
   }
   
-  static function verify($token=null, $input=null, $value=null){
+  static function verify($token=null, $input=null, $phrase=null){
     if(strlen($input)==0) return false;
 
     if(!is_null($token)){  // empty($token) ???
@@ -28,22 +28,25 @@ class AppCaptcha {
 
       if(!isset($_SESSION['@captcha'][$token])) return false;
       
-      $value = $_SESSION['@captcha'][$token];
+      $phrase = $_SESSION['@captcha'][$token];
       unset($_SESSION['@captcha'][$token]);
     }
 
-    return 0===strcasecmp($input, $value); 
+    return 0===strcasecmp($input, $phrase); 
   }
+
+
+  var $phrase = null;
 
   function next($token=null){
     AppSession::start();
 
     if(is_null($token)) $token = AppCaptcha::token();
     
-    list($answer, $question) = $this->make();
-    $_SESSION['@captcha'][$token] = $answer;
+    list($phrase, $question) = $this->make();
+    $_SESSION['@captcha'][$token] = $phrase; // TODO: $this->phrase
 
-    return array('token'=>$token, 'image'=>$question, 'value'=>$answer);
+    return array('token'=>$token, 'image'=>$question, 'phrase'=>$answer);
   }
 }
 
@@ -73,6 +76,8 @@ class AppCaptchaChar extends AppCaptcha {
     $data= ob_get_clean();
     imagedestroy($im);
     $question = 'data:image/png;base64,'.base64_encode($data);
+
+    $this->phrase = $answer;
     return array($answer, $question);
   }
 }
@@ -99,6 +104,8 @@ class AppCaptchaMath extends AppCaptcha {
     $data= ob_get_clean();
     imagedestroy($im);
     $question = 'data:image/png;base64,'.base64_encode($data);
+
+    $this->phrase = $answer;
     return array($answer, $question);
   }
 }
