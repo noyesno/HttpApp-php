@@ -25,6 +25,11 @@ class HttpApp {
   function __construct(){
     spl_autoload_register('AppAutoload::load'); # TODO: move to file core/AppAutoload.php
 
+
+    if($timezone = AppConfig::get('timezone')){
+      date_default_timezone_set($timezone); //e.g. Asia/Shanghai
+    }
+
     if(AppConfig::get('debug')){
       $level = E_ALL | E_STRICT;
     }else{
