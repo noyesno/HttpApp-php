@@ -19,30 +19,6 @@ function smarty_block_auth($param, $content, &$smarty, &$repeat) {
   return $content;
 }
 
-function compact_css($content, $with_date=true){
-  $lines = preg_split('/[\r\n]+/',$content);
-  
-  for($i=0,$n=count($lines); $i<$n; $i++){
-    $line = trim($lines[$i]);
-    $line = preg_replace("/\/\/(.*)/u",'',$line); // single line comment
-    $line = preg_replace('/\s+/', ' ', $line);   // merge white space
-    $line = str_replace(': ',':',$line);
-    $line = str_replace('; ',';',$line);	
-    $lines[$i] = $line;
-  }
-  $str = implode('',$lines);
-  $str = preg_replace("/\/\*(.*?)\*\//u","",$str);   // multiple line commment    
-  if($with_date) $str = '/* '.date('c').' */'.$str;
- 
-  return $str;
-}
-
-function smarty_block_css($param, $content, &$smarty) {
- if($repeat) return; // open tag
- if($_GET['_debug']) return $content;
- return compact_css($content);
-}
-
 function smarty_optimize_template($tpl_source, $smarty){
   $lines = split("\n",$tpl_source);
   $tlines = array(); 
@@ -81,10 +57,10 @@ class AppSmarty extends Smarty {
   static $inst = null;
 
   public static function instance(){
-
-    if(self::$inst == null){
+    if(is_null(self::$inst)){
       self::$inst = new AppSmarty();
     }
+
     return self::$inst;
   }
 
@@ -122,36 +98,64 @@ class AppSmarty extends Smarty {
   public function __construct(){
     parent::__construct();
 
-    $this->setTemplateDir(HTTP_APP.'/page');
-    $this->setCompileDir(HTTP_APP.'/cache/__compile__');
-    $this->setCacheDir(HTTP_APP.'/cache/__page__');
+    $tpl_dir = AppConfig::get('smarty.template_dir', HTTP_APP.'/page');
+    $this->setTemplateDir($tpl_dir);
+    $this->setConfigDir(  AppConfig::get('smarty.config_dir',   $tpl_dir));
+    $this->setCompileDir( AppConfig::get('smarty.compile_dir',  HTTP_CACHE.'/__compile__'));
+    $this->setCacheDir(   AppConfig::get('smarty.cache_dir',    HTTP_CACHE.'/__page__'));
+
     $this->addPluginsDir(HTTP_APP.'/lib/smarty/plugins');
-    $this->setConfigDir(HTTP_APP.'/page');
+
     $this->use_sub_dirs  = true; //true; 
     $this->compile_check = Smarty::COMPILECHECK_CACHEMISS; //false; // true; // Smarty::COMPILECHECK_CACHEMISS
-    // $this->compile_check = true;
     $this->cache_modified_check = true;
-    //$this->caching_type = 'sfile';
-    if(1 || isset($_GET['_sqlite'])) $this->caching_type = 'sqlite';
+    $this->caching_type = AppConfig::get('smarty.caching_type','file');
     $this->default_modifiers = array('escape:"html"');
+    $this->cache_locking = true;   // $locking_timeout = 10
+
+    // TODO: for better debug and development control
+    if(AppConfig::get('debug')){
+      // $this->force_compile = true;
+      $this->compile_check = true;
+    }
 
     if(!empty($_GET['_nocache'])){
       $this->compile_check = true;
     }
 
-    if(isset($_GET['theme'])){
-      $theme = $_GET['theme'];
-      $path = HttpRequest::$root;
-      setcookie('theme', $theme, time()+3600*24*7, $path);
-      $_COOKIE['theme'] = $theme;
-    }else if(isset($_COOKIE['theme'])){
-      $theme = $_COOKIE['theme'];
+    $theme_param   = AppConfig::get('theme.param', 'theme');
+    $theme_cookie  = AppConfig::get('theme.cookie', 'theme');
+    $theme_default = AppConfig::get('theme.default');
+
+    $theme = null;
+    if(isset($_GET[$theme_param])){
+      $theme = $_GET[$theme_param];
+    }else if(!empty($theme_cookie) && !empty($_COOKIE[$theme_cookie])){
+      $theme = $_COOKIE[$theme_cookie];
+    }else if(!empty($theme_default)){
+      $theme = $theme_default;
     }
 
-    if(isset($_COOKIE['theme'])){
-      list($theme, $style) = explode('/', $_COOKIE['theme']);
+    if(!empty($theme)){
+      list($layout, $style) = explode('/', $theme);
       $this->compile_id = $theme;
-      if($theme != 'default' && $theme!='') $this->setTemplateDir(HTTP_APP."/theme/$theme");
+      if($layout != 'default' && $layout!=''){
+         $this->setTemplateDir(array(
+           'theme'=>HTTP_APP."/theme/$layout",
+           'base' =>HTTP_APP."/page"
+         ));
+      }
+
+      AppConfig::set('theme',  $theme);
+      AppConfig::set('style',  $style);
+      AppConfig::set('layout', $layout);
+
+      if(!empty($theme_cookie)){
+        #TODO:# $path = HttpRequest::$root;
+        $path = '/';
+        setcookie($theme_cookie, $theme, time()+3600*24*7, $path);
+        $_COOKIE[$theme_cookie] = $theme;
+      }
     }
 
      // {$var nofilter}
@@ -166,17 +170,38 @@ class AppSmarty extends Smarty {
     //$cfgfile = AppConfig::get('smarty.cfg');
     //if($file = AppConfig::get('smarty.cfg')) $this->configLoad($file);
     //TODO: $this->configLoad(HTTP_APP.'/conf/smarty.cfg');
+    #-- try {
+    #--   $this->configLoad(HTTP_CONF.'/smarty.cfg');
+    #-- } catch (Exception $e){
+    #--   echo $e;
+    #-- }
 
     $this->registerPlugin("block",'dynamic', 'smarty_block_dynamic', false);
     $this->registerPlugin("block",'auth',    'smarty_block_auth', false, array('cache-inside'));
     $this->registerPlugin("block",'hide',    'smarty_block_hide', false);
-    $this->registerPlugin("block",'css',     'smarty_block_css', true);
+    //$this->registerPlugin("block",'css',     'smarty_block_css', true);
     //$this->registerFilter('output','smarty_optimize_template');
   }
 
+   function purge(){
+     $this->force_cache = true;
+     $this->cache_lifetime = 0;
+   }
 
    //public function fetch($template, $cache_id = null, $compile_id = null, $parent = null, $display = false)
    public function fetch($template = null, $cache_id = null, $compile_id = null, $parent = null, $display = false, $merge_tpl_vars = true, $no_output_filter = false){
+
+     if($display){
+       $this->assign('config', AppConfig::get()); // TODO:
+       $this->assign('theme',  AppConfig::get('theme'));  // TODO:
+       $this->assign('style',  AppConfig::get('style'));  // TODO:
+       $this->assign('layout', AppConfig::get('layout')); // TODO:
+     }
+
+     return parent::fetch($template, $cache_id, $compile_id, $parent, $display, $merge_tpl_vars, $no_output_filter);
+   }
+
+   public function fetch_bak($template = null, $cache_id = null, $compile_id = null, $parent = null, $display = false, $merge_tpl_vars = true, $no_output_filter = false){
      if (!empty($cache_id) && is_object($cache_id)) {
          $parent = $cache_id;
          $cache_id = null;
@@ -189,19 +214,26 @@ class AppSmarty extends Smarty {
      ($template instanceof $this->template_class)? $_template = $template :
      $_template = $this->createTemplate ($template, $cache_id, $compile_id, $parent);
 
-     if($this->cache_modified_check && $this->caching && $display && $_template->isCached()) {
-       $_gmt_mtime = gmdate('D, d M Y H:i:s T', $_template->getCachedTimestamp());
-       //$view_prefix = '"'.AuthUtil::uid().'@';
-       $view_prefix = '"'.'0'.'@';
-       $etag_prefix = isset($_SERVER['HTTP_IF_NONE_MATCH'])?$_SERVER['HTTP_IF_NONE_MATCH']:'';
-       $modified_since = isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])?$_SERVER['HTTP_IF_MODIFIED_SINCE']:'';
-       if($_gmt_mtime == $modified_since && 
-         strncmp($etag_prefix, $view_prefix, strlen($view_prefix))==0
-       ){
-         // use cache  
-         //header('Pragma:'); header('Expires:'); header('Cache-Control:');
-         header((php_sapi_name()=='cgi'?'Status:':$_SERVER["SERVER_PROTOCOL"]).' 304 Not Modified');
-         return;
+
+     if($display){
+       if($this->cache_modified_check && $this->caching && $_template->isCached()) {
+         $cache_mtime = $_template->cached->timestamp;
+         $modified_since = HttpRequest::getLastModified();
+         # TODO: if emtpy content? check etag?
+         if($cache_mtime>0 && $cache_mtime <= $modified_since && !$_template->has_nocache_code){
+           HttpResponse::status(304);
+           return;
+         }
+         //$view_prefix = '"'.AuthUtil::uid().'@';
+         $view_prefix = '"'.'0'.'@';
+         $etag_prefix = isset($_SERVER['HTTP_IF_NONE_MATCH'])?$_SERVER['HTTP_IF_NONE_MATCH']:'';
+         $modified_since = isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])?$_SERVER['HTTP_IF_MODIFIED_SINCE']:'';
+         if($cache_mtime == $modified_since && 
+           strncmp($etag_prefix, $view_prefix, strlen($view_prefix))==0
+         ){
+           // use cache  
+           return;
+         }
        }
      }
      // send_etag($html);
@@ -210,5 +242,5 @@ class AppSmarty extends Smarty {
 
      return $html;
    } // end fetch(...)
+
 } // end class AppSmarty
-?>

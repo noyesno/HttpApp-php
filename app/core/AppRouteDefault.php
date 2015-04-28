@@ -14,15 +14,18 @@ class AppRouteDelegate {
   }
 
   function route($path){
-    if(empty($path)) $path='home';
+    //if(empty($path)) $path='home';
 
     # TODO
     $file_lut = array(
       '/page'=>'app'
     ); 
 
-    $toks = explode('/',$path);
-    $app_path=''; $app_type = '';
+    $app_type = '.app';
+    $app_path = '';
+
+    //$app_path=''; $app_type = '';
+    $toks = empty($path)?array():explode('/',$path); // TODO: use strlen($path)==0 to avoid '0', 'null'
     foreach($toks as $name){
       $_path = "$app_path/$name";
       if(isset($file_lut[$_path])){
@@ -47,6 +50,7 @@ class AppRouteDelegate {
 
     $env =& AppRegistry::get('env');
 
+    AppLog::debug("app_path = $app_path , app_type = $app_type");
     $env['app']['dir']     = HTTP_APP."/page$app_path"; 
 
     $app_path = trim($app_path,'/');
@@ -64,7 +68,9 @@ class AppRouteDelegate {
         $app_php   = "404.php"; $app_tpl   = "404.tpl"; $app_type='404';
     }
 
-    $app_args = substr($path, strlen($app_path)+1);
+    $app_php = ltrim($app_php, '/'); $app_tpl = ltrim($app_tpl, '/');
+
+    $app_args = trim(substr($path, strlen($app_path)),'/');
     $app_argv = strlen($app_args)==0?array():explode('/', $app_args);
 
 
@@ -86,8 +92,10 @@ class AppRouteDelegate {
 	'/');
 */
 
-    $env['app']['base']     = rtrim(substr($env['request']['url'].'/', 0, -strlen($app_args)-1),'/');
-
+    $request_url = rtrim($env['request']['url'],'/');
+    $env['app']['base']     = rtrim(substr($request_url.'/', 0, -strlen($app_args)-1),'/');
+    $env['app']['root']     = rtrim(substr($request_url.'/', 0, -strlen(trim("$app_path/$app_args",'/'))-1),'/');
+    //TODO:
     $env['app']['php']      = $app_php;   
     $env['app']['tpl']      = $app_tpl;   
 
@@ -98,6 +106,7 @@ class AppRouteDelegate {
       'tpl' => $app_tpl,
       'argv'=> $app_argv
     );
+    //var_export($env);
     $this->deletgate($node);
     return $node;
     //return array($app_type, $app_path, $app_php, $app_tpl, $app_argv);
@@ -123,7 +132,7 @@ class AppRouteDelegate {
           break;
       }
 
-      $app->onLoad();
+      $app->onLoad(); // TODO: move to page class??
       $app->display();
       $app->onUnload();
   }
@@ -151,12 +160,16 @@ class AppRouteDelegate {
         return 0;
       }
 
-      // TODO: move to page constructor();
-      $app_model = dirname($file_php).'/'.$app_name.'.model';
-      if(file_exists($app_model)){
-        @require_once($app_model);
-        $app->model = new IHttpPageModel();
-      }
+      //-- // TODO: move to page constructor();
+      //-- $app_model = dirname($file_php).'/'.$app_name.'.model';
+      //-- if(file_exists($app_model)){
+      //--   $ret = @require_once($app_model);
+      //--   if($ret === 1){
+      //--     $app->model = new IHttpPageModel(); // TODO: drop this usage
+      //--   }else{
+      //--     $app->model = $ret;
+      //--   }
+      //-- }
       return $app;
   }
 }
@@ -226,7 +239,9 @@ class AppRoutePrelude {
       if($acl){
         $this->auth();
         if(!AuthUtil::acl($acl)->check()){ // ACL FAIL
-            echo 'auth fail';exit(0);
+          echo 'auth fail';
+          return HttpApp::brake();
+
           if($acl_action[0]=='/'){ // it's a URL
             $url = $env['root'].$acl_action;
             HttpResponse::redirect($url);
@@ -285,3 +300,4 @@ class AppRouteCaptcha {
         // throw new SystemExit();
   }
 }
+

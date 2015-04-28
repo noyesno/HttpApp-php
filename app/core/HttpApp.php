@@ -1,4 +1,7 @@
 <?php
+
+if(!defined('HTTP_CACHE')) define('HTTP_CACHE', HTTP_APP.'/cache');
+
 /*===============================================================*
 * error_reporting(E_ERROR | E_WARNING | E_PARSE);
 * error_reporting(E_ALL | E_STRICT);
@@ -18,25 +21,38 @@
  * HttpApp - Global Controller
  ***********************************************************/
 
-
 include('core/AppAutoload.php');
 
 class HttpApp {
-  function __construct(){
-    spl_autoload_register('AppAutoload::load'); # TODO: move to file core/AppAutoload.php
 
+  public static function brake(){
+    throw new SystemExit();
+  }
+
+  public static function alarm($message){
+    throw new Exception($message);
+    // fastcgi_finish_request();
+  }
+
+  function __construct(){
 
     if($timezone = AppConfig::get('timezone')){
       date_default_timezone_set($timezone); //e.g. Asia/Shanghai
     }
 
+    // TODO:
+    // error_reporting(-1);
     if(AppConfig::get('debug')){
-      $level = E_ALL | E_STRICT;
+      $level = (E_ALL | E_STRICT) & ~E_NOTICE; // E_STRICT
+      $level = (E_ALL  ) & ~E_STRICT & ~E_NOTICE; // E_STRICT
+      ini_set("display_errors", 1); 
+      ini_set("error_log", 'error_log'); 
     }else{
       $level = E_ALL ^ E_NOTICE;
     }
     error_reporting($level);
     set_error_handler("AppError::handle", $level);
+    set_exception_handler('AppError::exception');
 
     if($value = AppConfig::get('session.cookie_domain')){
       ini_set('session.cookie_domain',$value);
@@ -118,6 +134,11 @@ class HttpApp {
    */
 
   function init($path){
+    if(strlen($path)>512){
+      return self::alarm("Long Request Path ".strlen($path).' '.substr($path, 0, 128));
+    }
+
+
     HttpRequest::init();
 
     /******************* Init Request Info *****************/
@@ -127,7 +148,7 @@ class HttpApp {
     $url =  urldecode(array_shift($toks));
     $this->env['request'] = array(
 	'path'   => trim($path,'/'),
-	'url'    => $url,
+	'url'    => '/'.trim($url,'/'),
         'server' => $server,
         'script' => $script,
 	'qstring'=> $_SERVER['QUERY_STRING']
@@ -144,6 +165,7 @@ class HttpApp {
     /******************* Init App Setting *****************/
 
     $this->env['app'] = array(
+        'lang' => AppConfig::get('lang','zh'),
 	'path' => $this->env['request']['path'],
 	'args' => array()
     );
@@ -173,6 +195,7 @@ class HttpApp {
   } // end init
 
   function dispatch($path='/'){
+      $path = trim($path,'/');
       $this->init($path);
 
       HttpResponse::setContentType('text/html','utf-8');
@@ -186,6 +209,48 @@ class HttpApp {
       AppRoute::route($path);
       return;
   } // end run
+
+  public function run($path=null){
+    try {
+      /* code code */
+
+      // AppWall::run();
+
+      //ob_start();
+      HttpResponse::capture();
+      //session_start();
+
+      if(is_null($path)) $path = isset($_GET['@page'])?$_GET['@page']:'/';
+
+      AppTimer::mark('dispatch');
+
+      $this->dispatch($path);
+
+      AppTimer::elapse('dispatch');
+      // echo AppTimer::$elapse['dispatch'];
+      //HttpResponse::setData($data);
+
+      //TODO: $headers = HttpResponse::getHeader();
+      AppLog::trace('send() # elapse='.AppTimer::elapse());
+      #-- if(!empty($_GET['_profile']) || !empty($_GET['.profile'])){
+      #--   HttpResponse::header('X-Profile', print_r(AppTimer::$elapse, true));
+      #-- }
+      HttpResponse::send();
+      AppLog::trace('...... '.date('r').' ......');
+
+    } catch (SystemExit $e) {
+
+      /* do nothing */
+    } catch (Exception $e) {
+
+      HttpResponse::status(500); 
+      $smarty = AppSmarty::instance();
+      $smarty->assign('exception', $e);
+      $smarty->display('500.tpl');
+      // echo 'Exception: ', $e;
+      throw $e;
+    }
+  }
 
 } // end class: HttpApp
 
@@ -204,17 +269,6 @@ class SystemExit extends Exception {}
 class AppExit extends Exception {} // use this to replace SystemExit
 // Infact, we should distinguish request exit and FastCGI exit
 
-$appc = HttpApp::instance();
-$appc->schema = array(
-      'route'=> array( //format: pattern  param_names acl acl_fail_action
-        //-- array('^/(0\d+)/?(.*)', array('cid','.')),
-        //-- array('^/cities$'),
-        //-- array('^/help/.*'),
-        //-- array('^/admin/login$'),
-        //-- array('^/admin/?.*',                          null, 'admin', '/admin/login'),
-        //-- array('^/(event|agency|friend|marriage)/?.*', null, '!all', 'guess_visitor_city')
-      )
-);       
 
 //*
 AppRoute::add('^/', 'AppRouteCaptcha'); 
@@ -224,22 +278,4 @@ AppRoute::add('^/', 'AppRouteDelegate');
 AppRoute::add('^/', 'AppRouteWatchdog'); 
 //*/
 
-try {
-  /* code code */
-  
-  // AppWall::run();
-
-  //ob_start();
-  HttpResponse::capture();
-  //session_start();
-  
-  $path = isset($_GET['@page'])?$_GET['@page']:'/';
-  $appc->dispatch($path);
-  //HttpResponse::setData($data);
-  HttpResponse::send();
-}catch (SystemExit $e){
-  /* do nothing */
-}catch (Exception $e){
-  echo 'Exception: ', $e;
-}
-
+//TODO: fastcgi_finish_request();

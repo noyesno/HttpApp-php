@@ -10,6 +10,16 @@
 class HttpPage {
     //XXX: var $urn;   // URN
 
+    const NOOP                = 100;   // const
+    const CACHE_PRE_CHECK     = 101;   // const
+    const CACHE_POST_CHECK    = 103;   // const
+    const CACHE_NOT_MODIFIED  = 104;   // const
+    const CACHE_PURGE         = 105;   // const
+    const RENDER              = 200;   // const
+    const RENDER_POST_PROCESS = 203;   // const
+
+    var $stage = null;
+
     var $env;   // App specific data
     var $argc;  // number of URL args
     var $argv;  // URL args
@@ -30,6 +40,22 @@ class HttpPage {
       $this->args = $env['app']['args'];
       $this->argv = $env['app']['argv'];
       $this->argc = $env['app']['argc'];
+
+    }
+
+    function __get_model(){
+      $file_php = HTTP_APP.'/page/'.$this->env['app']['php'];
+      $app_name = basename($file_php, '.php');
+      $app_model = dirname($file_php).'/'.$app_name.'.model';
+      if(file_exists($app_model)){
+        $ret = @require($app_model);
+        if($ret === 1){
+          $this->model = new HttpPageModel($this); // TODO: drop this usage
+        }else{
+          $this->model = $ret;
+        }
+      }
+      return $this->model;
     }
 
     function __get($name){
@@ -41,11 +67,15 @@ class HttpPage {
           $this->view   = new HttpPageView($this);
 	  return $this->view;
         case 'model':
-          $this->model = new HttpPageModel($this);
-	  return $this->model;
+          return $this->__get_model();
+          // $this->model = new HttpPageModel($this);
+	  // return $this->model;
         default:
 	  return null;
       }
+    }
+
+    function _dummy_(){
     }
 
     /* =================== Method ==================== */  
@@ -57,12 +87,25 @@ class HttpPage {
     function render(){
     }
     function display(){
+      //echo AppTimer::elapse(); # used much time already
+      AppLog::debug('-> page.dispatch');
+      AppTimer::mark('page.dispatch');
+
       if(isset($this->schema['route']))
           $this->helper->dispatch();
       else
           $this->render();
 
+      AppTimer::elapse('page.dispatch');
+      AppLog::debug('<- page.dispatch');
+      //echo AppTimer::elapse(); # used much time already
+      AppLog::debug('-> page.display');
+      AppTimer::mark('page.display');
+
       $this->view->display();
+
+      AppTimer::elapse('page.display');
+      AppLog::debug('<- page.display');
     }
     // Step 3. 
     function onUnload(){}
@@ -122,6 +165,7 @@ class HttpPageHelper {
   function run($path, $schema, $argv){
     list($method, $pattern, $action, $tpl, $cache, $acl, $acl_action, $form, $validate_action) 
        = array_pad($schema, 9,  null);
+    if(empty($action)) $action = '_dummy_';
 
     ### STEP 1: ACL Check
     if($acl){    // RBAC: Role Based Access Control
@@ -130,6 +174,7 @@ class HttpPageHelper {
         if($acl_action[0] == '/'){
           return $this->dispatch($method, $acl_action);
         }else{
+          #TODO: use AUTH_PRE_CHECK
           call_user_func_array(array($this->page, $acl_action),$argv);
         }
         return;
@@ -158,37 +203,102 @@ class HttpPageHelper {
     $this->page->view->tpl($tpl); 
 
     // TODO: reset: $this->page->view->reset()
-    ### STEP 4: Cache Check
-    if($tpl && isset($cache) && !isset($_GET['_nocache'])){
+    ### STEP 3: Cache Check
+    $cache_life = 0; $max_age = 0; 
+    $cache_pre_check = 0; $cache_purge = 0; $is_cached = 0;
+
+    ## TODO: instead of _nocache, use _purge here?
+    if(isset($cache) && empty($_GET['_nocache'])){
       // TODO: make it more inteligent
-      if(is_numeric($cache)) {
+      if(is_int($cache)) {
         $cache_life = $cache;
-        $max_age    = max(10,min(300,$cache*0.1)); // 10s ~ 5min
+        #XXX: calcuate client side cach from serverside cache
+        $max_age    = max(30, min(360,$cache*0.15)); // 30s ~ 6min
       }else if(is_string($cache)){
-        list($cache_life, $max_age, $smax_age) = array_pad(implode('/',$cache),null,3);
-      }
-      if($max_age>0){
-        //HttpResponse::setCacheControl('public',$max_age,false);
-        $this->page->view->cache_control = array( 'public','max-age'=>$max_age);
-      }
-      if($cache_life > 0){
-        $this->page->view->cache($cache_life);
-        if($this->page->view->isCached()) return;
+        $cache_pre_check = (substr($cache,-1)=='|');
+        list($cache_life, $max_age, $smax_age) = array_pad(explode('/',trim($cache,'|')), 3, null);
+      }else if(is_array($cache)){
+        list($cache_life, $max_age, $smax_age) = array_pad($cache,3, null);
       }
     }
+    $this->page->view->cache['lifetime'] = $cache_life;
+
+    if($max_age>0){
+      //HttpResponse::setCacheControl('public',$max_age,false);
+      $this->page->view->cache_control = array('public','max-age'=>$max_age);
+    }
+
+    # TODO:
+    $page = $this->page;
+    if($cache_pre_check && !empty($action)){
+      AppLog::debug('-> CACHE_PRE_CHECK');
+      $this->page->STATE = $page::CACHE_PRE_CHECK;
+      $ret = call_user_func_array(array($this->page, $action),$argv);
+      AppLog::debug('<- CACHE_PRE_CHECK');
+      switch($ret){
+        case $page::CACHE_PURGE :
+          $cache_purge = 1;
+          $cache_life  = $this->page->view->cache['lifetime']; // purge cache ???  ! always regenerate
+          break;
+        case $page::CACHE_NOT_MODIFIED :
+          $is_cached = 1;
+          AppLog::debug('-> CACHE_NOT_MODIFIED');
+          HttpResponse::status(304);
+          AppLog::debug('<- CACHE_NOT_MODIFIED');
+          return;
+      } 
+    }
+    # TODO: post cache check
+
+    ### STEP 4: Init TPL File
+    #TODO: skip when CACHE_NOT_MODIFIED
+    if($tpl){
+      $this->page->view->tpl($tpl); 
+      $this->page->view->cache($cache_life);
+
+      #TODO: change to $use_cache?
+      $is_cached = (empty($_GET['_nocache']) && ($is_cached || ($cache_life>0 && $this->page->view->isCached())))?1:0;
+    }
+
     ### STEP 5 : Execute
-    if(!empty($action)){
-      call_user_func_array(array($this->page, $action),$argv);
+    // HttpResponse::header('X-Date',  gmdate('D, d M Y H:i:s T'));
+    HttpResponse::header('X-Debug', "cached=$is_cached, purge=$cache_purge");
+    AppLog::debug('X-Debug: ' . "cached=$is_cached, purge=$cache_purge");
+
+    if($is_cached){
+      AppLog::debug('use cache');  // X-Debug: Use Cache
+      //-- HttpResponse::status(304);
+    } else {
+      if(!empty($action)){
+        AppLog::debug('-> RENDER');
+        $this->page->STATE = $page::RENDER;
+        call_user_func_array(array($this->page, $action),$argv);
+        AppLog::debug('<- RENDER');
+      }
     }
+
+    /*
+    # TODO: a bug found here, many operations are called twice
+    AppLog::debug('-> RENDER_POST_PROCESS');
+    $this->page->STATE = $page::RENDER_POST_PROCESS;
+    $ret = call_user_func_array(array($this->page, $action),$argv);
+    AppLog::debug('<- RENDER_POST_PROCESS');
+    */
+
     return;
   }
 
 
   function url(){ /*** variable length args ***/
-    $base = $this->page->env['app']['base'];
+    // TODO: use app.root if like /def
     $parts = func_get_args();
-    $path = trim(implode('/',$parts),'/');
-    $url = rtrim($base.'/'.$path, '/');
+    $suburl = implode('/',$parts);
+    if($suburl[0] == '/'){
+      $url = $this->page->env['app']['root'].'/'.trim($suburl,'/');
+    }else{
+      $url = $this->page->env['app']['base'].'/'.trim($suburl,'/');
+    }
+    $url = rtrim($url, '/');
     return $url;
   }
 } // end class: HttpPageHelper
@@ -217,6 +327,10 @@ class HttpPageModel {
 class HttpPageView {
   var $page;                    // page instance
   var $tpl;
+
+  var $cache = array();
+  var $stat  = array();
+
   var $data = array();
   var $cache_control = null;
 
@@ -224,7 +338,21 @@ class HttpPageView {
     $this->page   =& $page;
     // TODO:
     $this->tpl($page->env['app']['tpl']);
-  }             
+  }
+
+  function checkStatTime($mtime){
+    $modified_since = HttpRequest::getLastModified();
+    if(HttpRequest::checkModifiedSince($mtime)){
+      AppLog::debug("-> view.checkStatTime $mtime");
+      # Need Purge
+      $this->cache['lifetime']       = max(1,min($this->cache['lifetime'], time() - $mtime));
+      $this->cache['modified_since'] = $modified_since;
+      $this->stat['mtime']           = $mtime;
+      AppLog::debug('<- view.checkStatTime '.$this->cache['lifetime']);
+      return true;
+    }
+    return false;
+  }
 
   function assign($name,$value){
     $this->data[$name] = $value;
@@ -246,36 +374,54 @@ class HttpPageView {
 
     $path = $this->page->env['app']['path'];
     $base = $this->page->env['tpl']['dir'];
+    # TODO:
+    $smarty = AppSmarty::instance();
+    $tpl_dirs = $smarty->getTemplateDir();
     foreach(array($path, dirname($path),'.') as $dir){
       //$file = preg_replace('#^\./#','',$dir.'/'.$tpl);
       $file = ltrim($dir.'/'.$tpl,'./');
-      if(file_exists($base.'/'.$file)){
-        $this->tpl = $file;
-        return $this->tpl;
+      foreach($tpl_dirs as $base){
+        #-- echo "--debug $base / $file --\n";
+        $base = rtrim($base,'/');
+        //AppLog::debug("tpl(): check $base / $file");
+        if(file_exists($base.'/'.$file)){
+          $this->tpl = "$base/$file"; //$file;
+
+          return $this->tpl;
+        }
       }
     }
 
-    print("Tpl [$tpl] not found\n");
-    throw new SystemExit();
+    #//TODO: print("Tpl [$tpl] not found\n");
+    //throw new SystemExit();
+    return false; 
   }
 
 
   #====================== Cache ======================#
-  function cache($time=600){ // seconds, default to 10 minutes
+  function cache($time=600, $saved=false){ // seconds, default to 10 minutes
       $smarty = AppSmarty::instance();
 
-      if($time<=0){
+      if($time===false){
         $smarty->caching = Smarty::CACHING_OFF;
 	return 0;
       }
 
-      $smarty->caching        = Smarty::CACHING_LIFETIME_CURRENT;
-      $smarty->caching        = Smarty::CACHING_LIFETIME_SAVED;
+      if($time===0){
+        $smarty->force_cache = true;
+      }
+
       $smarty->cache_lifetime = $time;
+
+      if($saved){
+        $smarty->caching        = Smarty::CACHING_LIFETIME_SAVED;
+      } else {
+        $smarty->caching        = Smarty::CACHING_LIFETIME_CURRENT;
+      }
 
       if(isset($_GET['_nocache'])){
         $smarty->compile_check = true;
-        $smarty->cache_lifetime = 5; 
+        //-- $smarty->cache_lifetime = 5; 
       }
        
       return 1;
@@ -288,7 +434,7 @@ class HttpPageView {
       $cache_id = $this->cacheID();
 
       if(isset($_GET['_nocache'])){
-        $smarty->clearCache($tpl,$cache_id);
+        //-- $smarty->clearCache($tpl,$cache_id);
         return false;
       }
 
@@ -309,7 +455,7 @@ class HttpPageView {
     $qstring = http_build_query($params);
     $cache_id = strtr($this->page->env['request']['path'],'/','|').'|'.$qstring;
     $cache_id = trim($cache_id,'|?');
-    $cache_id = str_replace(array('%2F','%3A'), array('/',':'), urlencode($cache_id));
+    $cache_id = str_replace(array('%7C','%2F','%3A'), array('|','/',':'), urlencode($cache_id));
 
     return $cache_id;
   }
@@ -341,15 +487,18 @@ class HttpPageView {
       if(isset($_GET['_nocache'])){
         $smarty->compile_check = true;
       }
-      if(AppCfg::get('debug')){
+      if(AppConfig::get('debug')){
         $smarty->compile_check = true;
       }
 
 
-      $tpl = $this->tpl;
+      #-- $tpl = $this->tpl;
+      #-- $tpl_dir  = $this->page->env['tpl']['dir'];
+      #-- $tpl_file = $tpl_dir.'/'.$tpl;
+
+      $tpl_file = $tpl = $this->tpl; 
+
       $cache_id = $this->cacheID();
-      $tpl_dir  = $this->page->env['tpl']['dir'];
-      $tpl_file = $tpl_dir.'/'.$tpl;
 
       $this->page->env['tpl']['tpl']  = $tpl;
       $this->page->env['tpl']['path'] = $tpl_file;
@@ -370,7 +519,6 @@ class HttpPageView {
       $smarty->assign('schema',   $this->page->schema);
        */
 
-
       if(!is_file($tpl_file)){
         HttpResponse::status(404);
         throw new SystemExit();
@@ -379,23 +527,33 @@ class HttpPageView {
 
 
 
-      //@require('lib/smarty.helper.php'); // TODO: what is this used for?
+      @require('lib/smarty.helper.php'); // TODO: what is this used for?
       //TORM: echo "<!-- $tpl $cache_id  -->";
       //$smarty->display($tpl, $cache_id);
       //echo " $tpl + $cache_id ";
-      //if(isset($_GET['_nocache'])) $smarty->clearCache($tpl, $cache_id);
+      if(isset($_GET['_nocache'])) $smarty->clearCache($tpl, $cache_id);
 
       $smarty->addPluginsDir($this->page->env['app']['dir'].'/plugin');
       if(isset($_GET['_debug'])) echo $tpl,'@',$cache_id;
-      $output = $smarty->fetch($tpl, $cache_id);
+      //$output = $smarty->fetch($tpl, $cache_id);
+
       if(!empty($this->cache_control)){
         HttpResponse::setCacheControl($this->cache_control);
       }
-      echo $output;
+      //echo $output;
+
+      AppLog::debug("-> smarty.display $tpl | {$smarty->cache_lifetime} | $cache_id");
+      //AppLog::debug($smarty);
+      try {
+        $smarty->display($tpl, $cache_id);
+      } catch (Exception $e){
+        AppLog::debug($e);
+      }
+      AppLog::debug('<- smarty.display');
+
       //echo "[$tpl][$cache_id]";
       //echo '6:',HttpResponse::getHeader('cache-control');
   }
 
 }// end class
-
 

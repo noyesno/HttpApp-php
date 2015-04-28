@@ -5,7 +5,20 @@ class HttpResponse {
    * text/html; charset=utf-8
    * charset=utf-8
    */
+  static $data  = null;
+  static $cache = false;
+  static $gzip  = false;
 
+  public static function finish(){
+    // fastcgi_finish_request();
+  }
+
+  static function header($key, $val=null){
+    if(is_null($val)){
+      # TODO: remove ??
+    }
+    header("$key: $val");
+  }
 
   static function setContentType($content_type='text/plain', $enc='utf-8'){
     header('Content-Type: '.$content_type.'; charset='.$enc);
@@ -23,6 +36,8 @@ class HttpResponse {
 
   static function getHeader($name=null){
     $headers = headers_list();
+
+    if(is_null($name)) return $headers;
 
     $n = strlen($name);
     $value = null;
@@ -53,9 +68,10 @@ class HttpResponse {
     header('Cache-Control: '.implode(',',$toks));
     if($strategy !='no-cache' && $max_age>0){
       $mtime = time();
-      header('Pragma:');
+      //header('Pragma:');
       header('Vary: Accept');
-      header('Expires: '.gmdate('D, d M Y H:i:s T', $mtime+$max_age));
+      // TODO: better not use both
+      //header('Expires: '.gmdate('D, d M Y H:i:s T', $mtime+$max_age));
     }
   }
 
@@ -82,7 +98,9 @@ class HttpResponse {
     static $status_txt_lut = array(
       '200'=>'OK',
       '201'=>'Created',
+      '202'=>'Accepted',
       '204'=>'No Content',
+      '205'=>'Reset Content',
       '301'=>'Moved Permanently',
       '302'=>'Found',
       '303'=>'See Other',
@@ -92,7 +110,8 @@ class HttpResponse {
       '401'=>'Unauthorized', // Not Authorized
       '403'=>'Forbidden',
       '404'=>'Not Found',
-      '503'=>'Service Unavailable'
+      '500'=>'Internal Server Error',
+      '503'=>'Service Unavailable',
     );
 
     $status_txt = $status_txt_lut[$status];
@@ -107,9 +126,6 @@ class HttpResponse {
     header("ETag: $etag");
   }
 
-  static $data  = null;
-  static $cache = false;
-  static $gzip  = false;
 
   static function setGzip($gzip){
     self::$gzip = $gzip;
@@ -125,20 +141,22 @@ class HttpResponse {
   }
 
   static function send($clean_ob=true){
-    if(self::$data){
+    $data = '';
+    if(!is_null(self::$data)){
       $data = self::$data;
     }else{
       $data = ob_get_contents();
       if($clean_ob) ob_end_clean();
+      //TODO: if($data===false) $data = '';
     }
 
     $last_modified = self::getLastModified();
     $etag = md5($data);
 
-    if(isset($_SERVER['HTTP_IF_NONE_MATCH']) 
-      && strcmp($etag, $_SERVER['HTTP_IF_NONE_MATCH'])==0){
-      if(!isset($_SERVER['HTTP_IF_MODIFIED_SINCE']) 
-        || strcmp($last_modified, $_SERVER['HTTP_IF_MODIFIED_SINCE'])==0){
+    # TODO:
+    if(isset($_SERVER['HTTP_IF_NONE_MATCH']) && strcmp($etag, $_SERVER['HTTP_IF_NONE_MATCH'])==0){
+      if(!isset($_SERVER['HTTP_IF_MODIFIED_SINCE']) || strcmp($last_modified, $_SERVER['HTTP_IF_MODIFIED_SINCE'])==0){
+        AppLog::debug('send 304 If-None-Match');
         self::status(304);
       }else{
         echo $data;
@@ -146,10 +164,12 @@ class HttpResponse {
     }else{    
       $size = strlen($data);
       //header("Content-Length: $size");
-      self::setETag($etag);
+      //TODO: self::setETag($etag);
+      AppLog::debug('echo data');
       echo $data;
     }
-    flush();
+    AppLog::debug('flush');
+    flush(); /* TODO: is this help? */
     flush();
   }
 

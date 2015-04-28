@@ -1,56 +1,64 @@
 <?php
 
-# CAPTCHA = Completely Automated Public Turing test 
+# CAPTCHA = Completely Automated Public Turing test
 class AppCaptcha {
+  var $phrase = null;
+
   static function get($method='math'){
-    $class = 'AppCaptcha'.ucfirst($method);
-    return new $class();  
+    $class = 'AppCaptcha_'.ucfirst($method);
+    return new $class();
+  }
+  // TODO: use word 'phrase'
+
+
+  static function verify($token=null, $input=null, $value=null){
+    if(empty($token)) return false; // must have token !!! ???
+
+    if(!is_null($token)){  // empty($token) ???
+      AppSession::start();
+
+      if(!array_key_exists($token, $_SESSION['captcha'])) return false;
+      $value = $_SESSION['captcha'][$token];
+      unset($_SESSION['captcha'][$token]);
+
+      if(is_null($value)) return true;  // token only type
+    }
+
+    if(strlen($input)==0) return false;
+    return (0===strcasecmp($input, $value)); 
   }
 
-  static function token(){
+  function next($token=null){
+    AppSession::start();
+
     $parts = array(
       $_SERVER['REMOTE_ADDR'],
       $_SERVER['REMOTE_PORT'],
       $_SERVER['HTTP_USER_AGENT'],
       $_SERVER['REQUEST_TIME'],
       $_SERVER['LOCAL_ADDR'],
-      $_SERVER['LOCAL_PORT'],
+      //$_SERVER['LOCAL_PORT'],
       uniqid("captcha", true)
     );
-    return md5(join('',$parts));
-  }
-  
-  static function verify($token=null, $input=null, $phrase=null){
-    if(strlen($input)==0) return false;
+    if(is_null($token)) $token = md5(join('',$parts));
+    list($answer, $question) = $this->make();
+    $_SESSION['captcha'][$token] = $answer;
 
-    if(!is_null($token)){  // empty($token) ???
-      AppSession::start();
-
-      if(!isset($_SESSION['@captcha'][$token])) return false;
-      
-      $phrase = $_SESSION['@captcha'][$token];
-      unset($_SESSION['@captcha'][$token]);
-    }
-
-    return 0===strcasecmp($input, $phrase); 
-  }
-
-
-  var $phrase = null;
-
-  function next($token=null){
-    AppSession::start();
-
-    if(is_null($token)) $token = AppCaptcha::token();
-    
-    list($phrase, $question) = $this->make();
-    $_SESSION['@captcha'][$token] = $phrase; // TODO: $this->phrase
-
-    return array('token'=>$token, 'image'=>$question, 'phrase'=>$answer);
+    return array('token'=>$token, 'image'=>$question);
+    // return array('token'=>$token, 'image'=>$question, 'value'=>$answer);
   }
 }
 
-class AppCaptchaChar extends AppCaptcha {
+class AppCaptcha_Token extends AppCaptcha {
+  function make(){
+    $answer   = md5(uniqid('token'));
+    $question = $answer;
+    return array(null, null);
+    //return array($answer, null);
+  }
+}
+
+class AppCaptcha_Char extends AppCaptcha {
 
   function make(){
     # A-Z: 41-5a / a-z: 61-7a
@@ -62,10 +70,10 @@ class AppCaptchaChar extends AppCaptcha {
     $answer = $text;
 
     $img_width = 4*14;
-    $im = @imagecreate($img_width, 20) or die("Cannot Initialize new GD image stream");
+    $im = @imagecreate($img_width, 32) or die("Cannot Initialize new GD image stream");
     $bgd_color = imagecolorallocate($im, 0, 0, 0);
     $text_color = imagecolorallocate($im, 233, 233, 91);
-    imagestring($im, 5, 6, 2,  $text, $text_color);
+    imagestring($im, 5, 8, 8,  $text, $text_color);
     /*
      $angle = 20;
      $angle = rand(-10,+10);
@@ -76,13 +84,10 @@ class AppCaptchaChar extends AppCaptcha {
     $data= ob_get_clean();
     imagedestroy($im);
     $question = 'data:image/png;base64,'.base64_encode($data);
-
-    $this->phrase = $answer;
     return array($answer, $question);
   }
 }
-
-class AppCaptchaMath extends AppCaptcha {
+class AppCaptcha_Math extends AppCaptcha {
 
   function make(){
     $a = rand(0,50); $b = rand(0,50);
@@ -92,11 +97,11 @@ class AppCaptchaMath extends AppCaptcha {
     $choices = array("$a $op $b = ?", "? = $a $op $b", "$op$b + $a = ?");
     $text = $choices[array_rand($choices)];
 
-    $im = @imagecreate(110, 20) or die("Cannot Initialize new GD image stream");
+    $im = @imagecreate(110, 32) or die("Cannot Initialize new GD image stream");
     $bgd_color = imagecolorallocate($im, 0, 0, 0);
     $text_color = imagecolorallocate($im, 233, 233, 91);
-    imagestring($im, 4, 6, 2,  $text, $text_color);
-    #-- $angle = 20; 
+    imagestring($im, 4, 6, 8,  $text, $text_color);
+    #-- $angle = 20;
     #-- $angle = rand(-10,+10);
     #-- $im = imagerotate($im, $angle, $bgd_color);
     ob_start();
@@ -104,8 +109,6 @@ class AppCaptchaMath extends AppCaptcha {
     $data= ob_get_clean();
     imagedestroy($im);
     $question = 'data:image/png;base64,'.base64_encode($data);
-
-    $this->phrase = $answer;
     return array($answer, $question);
   }
 }

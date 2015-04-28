@@ -97,7 +97,20 @@ class HttpRequest {
 
 
   static function getLastModified(){
-    return isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])?$_SERVER['HTTP_IF_MODIFIED_SINCE']:null; 
+    //return isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])?$_SERVER['HTTP_IF_MODIFIED_SINCE']:null; 
+    return empty($_SERVER['HTTP_IF_MODIFIED_SINCE'])?0:strtotime($_SERVER['HTTP_IF_MODIFIED_SINCE']);
+  }
+
+  # return true when $mtime > If-Modifed-Since
+  static function checkModifiedSince($mtime, $check_expired=true){
+    if(empty($_SERVER['HTTP_IF_MODIFIED_SINCE'])) return false;
+    $modified_since = HttpRequest::getLastModified();
+
+    if($check_expired){
+      return ($modified_since>0 && $mtime>$modified_since);
+    } else {
+      return ($modified_since>0 && $mtime<=$modified_since);
+    }
   }
 
   static function ask_json(){
@@ -127,4 +140,3 @@ class HttpRequest {
   static function is_delete(){ return strcmp($_SERVER['REQUEST_METHOD'], 'DELETE')==0; }
   static function is_put()   { return strcmp($_SERVER['REQUEST_METHOD'], 'PUT')   ==0; }
 }
-

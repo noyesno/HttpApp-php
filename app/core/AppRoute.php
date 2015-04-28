@@ -55,7 +55,8 @@ class AppRoute {
      $pattern     = array('/:(\w+)/',       '/\{(\w+)\}/');
      $replacement = array('(?P<$1>[^/]+)',   '(?P<$1>[^/]+)');
      // '/\(\?\<(\w+)\>/' => '(?P<$1>'
-     if(version_compare(PHP_VERSION, '5.2.2') >= 0){
+     // Since PHP 5.2.2, can also use (?<name>pattern) and (?'name'pattern)
+     if(version_compare(PHP_VERSION, '5.2.2', '>=')){
        $pattern[]     = '/\(\?\<(\w+)\>/';
        $replacement[] = '(?P<$1>'; 
      }
